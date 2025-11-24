@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="et">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width,initial-scale=1" />
+	<title>Auto-mäng</title>
+	<style>
+		:root{--bg:#081120;--card:#101318;--accent:#ffcc00;--text:#eee}
+		html,body{height:100%;margin:0;font-family:Segoe UI,Roboto,Arial;background:linear-gradient(180deg,var(--bg),#031021);color:var(--text);-webkit-touch-callout:none;-webkit-user-select:none;-ms-user-select:none;user-select:none}
+		.wrap{max-width:520px;margin:18px auto;padding:14px;background:rgba(255,255,255,0.02);border-radius:10px}
+		h1{margin:0 0 8px;font-size:20px;text-align:center}
+		#game{display:block;background:#0b0f13;border-radius:6px;width:100%;height:640px;touch-action:none}
+		.controls{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
+		button{background:var(--accent);border:0;padding:8px 12px;border-radius:6px;color:#111;font-weight:700;cursor:pointer}
+		.info{color:#bbb;font-size:14px}
+		.hud{display:flex;gap:12px;align-items:center}
+		.overlay{position:relative}
+		#message{position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.6);padding:18px;border-radius:8px;text-align:center;display:none;min-width:220px}
+		#message h2{margin:0 0 8px;color:var(--accent)}
+		.touch{display:flex;gap:6px}
+		.touch button{background:#333;color:var(--text);padding:12px;border-radius:6px;width:56px}
+		footer{margin-top:12px;color:#999;font-size:13px;text-align:center}
+		#scoresModal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#101216;color:var(--text);padding:14px;border-radius:10px;display:none;z-index:30;min-width:260px}
+		#scoresModal h3{margin:0 0 8px}
+		#scoresModal ol{padding-left:18px}
+		.small{font-size:13px;color:#cfcfcf}
+		.row{display:flex;gap:8px;align-items:center}
+	</style>
+</head>
+<body>
+	<div class="wrap">
+		<h1>Liiklusvältija — Auto-mäng</h1>
+		<div class="overlay">
+			<canvas id="game" width="420" height="640"></canvas>
+			<div id="message">
+				<h2 id="msgTitle">Mäng peatatud</h2>
+				<div id="msgBody" class="small">Vajuta <strong>Alusta</strong> et mängida.</div>
+				<div style="margin-top:10px">
+					<button id="btnStart">Alusta</button>
+					<button id="btnRestart">Taasta</button>
+					<button id="showScores" style="margin-left:8px;background:#444;color:#fff">Edetabel</button>
+				</div>
+			</div>
+		</div>
+
+		<div class="controls">
+			<div class="hud">
+				<div class="info"><strong>Skoor:</strong> <span id="score">0</span></div>
+				<div class="info"><strong>Kiirus:</strong> <span id="speed">1.0</span></div>
+			</div>
+			<div class="row">
+				<button id="btnPause">Peata</button>
+				<button id="btnSound" title="Heli sisse/välja" style="background:#333;color:#fff;margin-left:8px">Heli ON</button>
+			</div>
+		</div>
+
+		<div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
+			<div class="info">Juhtimine: nooleklahvid või A / D; mobiilil kasuta puute-nuppe</div>
+			<div class="touch">
+				<button id="leftBtn">◀</button>
+				<button id="rightBtn">▶</button>
+			</div>
+		</div>
+
+		<footer>Auto-mäng — tee ruumi, väldi kokkupõrkeid. Tekst Eesti keeles.</footer>
+	</div>
+
+	<div id="scoresModal">
+		<h3>Edetabel</h3>
+		<ol id="scoresList"></ol>
+		<div style="margin-top:8px;display:flex;justify-content:space-between">
+			<button id="closeScores">Sulge</button>
+			<button id="resetScores" style="background:#444;color:#fff">Tühjenda</button>
+		</div>
+	</div>
+
+	<script>
+		// --- Setup ---
+		const canvas = document.getElementById('game');
+		const ctx = canvas.getContext('2d');
+		const W = canvas.width, H = canvas.height;
+
+		// UI
+		const scoreEl = document.getElementById('score');
+		const speedEl = document.getElementById('speed');
+		const msg = document.getElementById('message');
+		const msgTitle = document.getElementById('msgTitle');
+		const msgBody = document.getElementById('msgBody');
+		const btnStart = document.getElementById('btnStart');
+		const btnRestart = document.getElementById('btnRestart');
+		const btnPause = document.getElementById('btnPause');
+		const leftBtn = document.getElementById('leftBtn');
+		const rightBtn = document.getElementById('rightBtn');
+		const btnSound = document.getElementById('btnSound');
+		const showScores = document.getElementById('showScores');
+		const scoresModal = document.getElementById('scoresModal');
+		const scoresList = document.getElementById('scoresList');
+		const closeScores = document.getElementById('closeScores');
+		const resetScores = document.getElementById('resetScores');
+
+		// Game state
+		let running = false, gameOver = false;
+		let score = 0, speed = 0.7, frame = 0;
+		const player = {w:44,h:78,x:W/2-22,y:H-110,speed:4,clr:'#ff5c5c'};
+		const obstacles = [];
+
+		// Input state
+		const keys = {};
+
+		// Audio (WebAudio)
+		let audioEnabled = true;
+		const AudioCtx = window.AudioContext || window.webkitAudioContext;
+		const audioCtx = AudioCtx ? new AudioCtx() : null;
+
+		function playBeep(freq=880, duration=0.08, type='sine', gain=0.08){
+			if(!audioEnabled || !audioCtx) return;
+			const o = audioCtx.createOscillator();
+			const g = audioCtx.createGain();
+			o.type = type; o.frequency.value = freq; g.gain.value = gain;
+			o.connect(g); g.connect(audioCtx.destination);
+			o.start(); g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+			o.stop(audioCtx.currentTime + duration + 0.02);
+		}
+
+		function playCrash(){ playBeep(80,0.4,'sawtooth',0.18); }
+		function playPoint(){ playBeep(1200,0.08,'sine',0.06); }
+		function playClick(){ playBeep(120,0.06,'triangle',0.06); }
+
+		// --- High scores ---
+		const HS_KEY = 'automaang_highscores_v1';
+		function loadHighscores(){
+			try{ return JSON.parse(localStorage.getItem(HS_KEY) || '[]'); }catch(e){return[]}
+		}
+		function saveHighscores(list){ localStorage.setItem(HS_KEY, JSON.stringify(list)); }
+		function addHighscore(name, value){
+			const list = loadHighscores(); list.push({name,score:value,date:Date.now()});
+			list.sort((a,b)=>b.score-a.score); if(list.length>7) list.length=7; saveHighscores(list);
+		}
+		function showHighscores(){
+			const list = loadHighscores(); scoresList.innerHTML = '';
+			if(list.length===0){ scoresList.innerHTML = '<li class="small">Puuduvad skoorid</li>'; }
+			else list.forEach(it=>{ const li = document.createElement('li'); li.innerHTML = `${it.name} — ${it.score}`; scoresList.appendChild(li); });
+			scoresModal.style.display = 'block';
+		}
+
+		closeScores.addEventListener('click', ()=>scoresModal.style.display='none');
+		resetScores.addEventListener('click', ()=>{ localStorage.removeItem(HS_KEY); showHighscores(); });
+
+		// --- Game logic ---
+		function reset(){ score=0; speed=1; frame=0; obstacles.length=0; gameOver=false; player.x = W/2 - player.w/2; updateHUD(); }
+		function spawnObstacle(){ const w = 50 + Math.random()*110; const x = Math.max(30, Math.random()*(W - w - 60) + 30); obstacles.push({x,y:-90,w,h:28,clr:'#9aa'}); }
+		function rectsOverlap(a,b){ return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+
+		function updateHUD(){ scoreEl.textContent = Math.floor(score); speedEl.textContent = speed.toFixed(1); }
+
+		function step(){
+			if(!running) return;
+			frame++;
+			// spawn obstacles less frequently to slow the game
+			if(frame % Math.max(28, 100 - Math.floor(speed*4)) === 0) spawnObstacle();
+
+			for(let i=obstacles.length-1;i>=0;i--){
+				const ob = obstacles[i];
+				// move obstacles slower
+				ob.y += 1.4 + speed*1.0;
+				if(ob.y > H){ obstacles.splice(i,1); score += 10; playPoint(); }
+				if(rectsOverlap({x:player.x,y:player.y,w:player.w,h:player.h}, ob)) { running=false; gameOver=true; playCrash(); endGame(); }
+			}
+
+			// increase difficulty more slowly
+			if(frame % 300 === 0) speed += 0.12;
+			updateHUD();
+		}
+
+		function endGame(){ showMessage('Mäng läbi', 'Skoor: '+Math.floor(score)); setTimeout(()=>{ const name = prompt('Sisesta nimi edetabelisse (tühjaks jätmisel: Mängija)', 'Mängija') || 'Mängija'; addHighscore(name, Math.floor(score)); }, 200); }
+
+		// draw car (simple shape)
+		function drawPlayer(){ const p = player; ctx.save(); ctx.fillStyle = p.clr; ctx.fillRect(p.x,p.y,p.w,p.h); // windows
+			ctx.fillStyle = '#ffd'; ctx.fillRect(p.x+8,p.y+8, p.w-16, 18); ctx.restore(); }
+
+		function draw(){ ctx.clearRect(0,0,W,H); // background road
+			ctx.fillStyle='#06101a'; ctx.fillRect(0,0,W,H);
+			ctx.fillStyle='#222'; ctx.fillRect(44,0,W-88,H);
+			// center stripes (slower scroll)
+			for(let y=-40 + (frame*1 % 40); y<H; y+=40){ ctx.fillStyle='#fff'; ctx.fillRect(W/2-6,y,12,24); }
+			// obstacles
+			obstacles.forEach(ob=>{ ctx.fillStyle=ob.clr; ctx.fillRect(ob.x,ob.y,ob.w,ob.h); ctx.fillStyle='#222'; ctx.fillRect(ob.x+6,ob.y+4, ob.w-12, ob.h-8); });
+			// player
+			drawPlayer();
+			// HUD overlay
+			ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.fillRect(10,8,140,36);
+			ctx.fillStyle='#fff'; ctx.font='16px sans-serif'; ctx.fillText('Skoor: '+Math.floor(score), 16, 30);
+		}
+
+		function loop(){ updateInput(); step(); draw(); requestAnimationFrame(loop); }
+
+		// --- Input handling ---
+		document.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()] = true; if(e.key===' ') { e.preventDefault(); toggleStart(); } });
+		document.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+		// pointer/touch for on-screen buttons
+		function bindHold(el, keyName){ let active = false;
+			const start = (e)=>{ e.preventDefault(); active = true; keys[keyName] = true; };
+			const end = (e)=>{ active = false; keys[keyName] = false; };
+			el.addEventListener('pointerdown', start); el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end); el.addEventListener('pointerleave', end);
+			el.addEventListener('touchstart', start); el.addEventListener('touchend', end);
+		}
+		bindHold(leftBtn, 'arrowleft'); bindHold(rightBtn, 'arrowright');
+
+		function updateInput(){ if(keys['arrowleft'] || keys['a']) player.x -= player.speed; if(keys['arrowright'] || keys['d']) player.x += player.speed; player.x = Math.max(16, Math.min(W - player.w - 16, player.x)); }
+
+		// --- UI actions ---
+		btnStart.addEventListener('click', ()=>{ start(); playClick(); });
+		btnRestart.addEventListener('click', ()=>{ reset(); start(); playClick(); });
+		btnPause.addEventListener('click', ()=>{ togglePause(); });
+		btnSound.addEventListener('click', ()=>{ audioEnabled = !audioEnabled; btnSound.textContent = audioEnabled ? 'Heli ON' : 'Heli OFF'; playClick(); });
+		showScores.addEventListener('click', ()=>{ showHighscores(); playClick(); });
+
+		function start(){ if(gameOver){ reset(); } running = true; hideMessage(); }
+		function toggleStart(){ if(running){ running=false; showMessage('Peatud','Vajuta Alusta et jätkata'); } else start(); }
+		function togglePause(){ running = !running; if(!running) showMessage('Peatus','Mäng on peatatud'); else hideMessage(); }
+
+		function showMessage(title, body){ msgTitle.textContent = title; msgBody.textContent = body; msg.style.display = 'block'; }
+		function hideMessage(){ msg.style.display = 'none'; }
+
+		function endAndSave(){ addHighscore('Mängija', Math.floor(score)); }
+
+		// init
+		reset(); showMessage('Tere tulemast', 'Vajuta Alusta et alustada mängu'); requestAnimationFrame(loop);
+	</script>
+</body>
+</html>
